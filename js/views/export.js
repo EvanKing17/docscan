@@ -15,7 +15,8 @@ function fmtSize(n) {
 }
 
 function safeName(s) {
-  return (String(s).replace(/[\\/:*?"<>|]+/g, '-').trim() || defaultName()).slice(0, 120);
+  // Colons are kept (the default name has a time in it); a system that can't store them swaps them itself
+  return (String(s).replace(/[\\/*?"<>|]+/g, '-').trim() || defaultName()).slice(0, 120);
 }
 
 function seg(name, options, current) {

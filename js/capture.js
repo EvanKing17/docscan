@@ -2,7 +2,7 @@
  * Getting photos in. Decoding goes through <img>, which both Safari and Chrome rotate by the
  * EXIF orientation; createImageBitmap's imageOrientation option is ignored by some Safari builds.
  */
-export const MAX_EDGE = 2000;
+export const MAX_EDGE = 3200;   // a 12MP photo at nearly full size; iOS canvas limit is 16.7MP
 export const THUMB_EDGE = 360;
 
 export async function loadImage(blob) {

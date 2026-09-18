@@ -747,3 +747,33 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
   opacity: 0.8;
   user-select: none;
 }
+
+/* Page intro: morph out of the photo, then the filter scan */
+.intro { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.intro-photo,
+.intro-plain,
+.intro-filtered { position: absolute; display: block; }
+.intro-plain,
+.intro-filtered {
+  transform-origin: 0 0;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  background: #fff;
+}
+.intro-filtered { box-shadow: none; }
+.scanline {
+  position: absolute;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 2px;
+  background: #b8fff4;
+  box-shadow: 0 0 10px 3px rgba(34, 184, 165, 0.9), 0 0 36px 10px rgba(34, 184, 165, 0.45);
+}
+.scanline::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  height: 56px;
+  background: linear-gradient(to bottom, rgba(34, 184, 165, 0), rgba(34, 184, 165, 0.22));
+}

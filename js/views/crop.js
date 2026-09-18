@@ -6,7 +6,7 @@ import { getPage, updatePage } from '../store.js';
 import { editing, getAutoCorners, insetCorners, fullCorners } from '../pipeline.js';
 import { onCvState } from '../cv-client.js';
 import { toast } from '../ui.js';
-import { go } from '../actions.js';
+import { go, handoff } from '../actions.js';
 
 const el = document.getElementById('view-crop');
 const stage = el.querySelector('.crop-stage');
@@ -139,6 +139,7 @@ async function confirm() {
   if (!isValid(c)) return;
   const p = page;
   await updatePage(p, { corners: c.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]) });
+  handoff.morph = p.id;
   go('#/page/' + p.id);
 }
 
@@ -379,8 +380,8 @@ function showLoupe(f) {
   loupe.style.top = top + 'px';
   loupe.classList.add('show');
 
-  // About 56 source pixels across at 2000px, so individual pixels show
-  const span = Math.max(20, Math.max(W, H) * 0.028);
+  // About 64 source pixels across at 3200px, so individual pixels show
+  const span = Math.max(24, Math.max(W, H) * 0.02);
   const k = size / span;
   const ox = f[0] - span / 2, oy = f[1] - span / 2;
   const c = size / 2;

@@ -406,7 +406,7 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
  * point is the image centre. Ratios within 4% of Letter or A4 are snapped to it.
  */
 const PAPER = [8.5 / 11, 210 / 297];
-const MAX_OUT = 2400;
+const MAX_OUT = 3000;   // about 270 DPI on a Letter page
 
 function outputSize(c, iw, ih) {
   const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -494,7 +494,7 @@ function render({ corners, filter, rotation, maxDim, strength }) {
   const to = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, ow, 0, ow, oh, 0, oh]);
   const M = cv.getPerspectiveTransform(from, to);
   let out = new cv.Mat();
-  cv.warpPerspective(src, out, M, new cv.Size(ow, oh), cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
+  cv.warpPerspective(src, out, M, new cv.Size(ow, oh), cv.INTER_CUBIC, cv.BORDER_REPLICATE, new cv.Scalar());
   from.delete(); to.delete(); M.delete();
 
   if (ow !== finalW || oh !== finalH) {
@@ -563,14 +563,16 @@ function flatten(ch) {
 
 function applyFilter(rgbaMat, filter, strength) {
   switch (filter) {
-    case 'enhanced': return enhanced(rgbaMat);
+    case 'enhanced': return enhanced(rgbaMat, 1.2, -40, 1.35, 0.6);
+    case 'contrast': return enhanced(rgbaMat, 1.5, -100, 1.5, 0.9);
     case 'gray': return grayscale(rgbaMat);
     case 'bw': return blackWhite(rgbaMat, strength);
     default: return rgbaMat;
   }
 }
 
-function enhanced(m) {
+// Colour kept, lighting flattened, then contrast (alpha, beta), saturation and sharpening
+function enhanced(m, alpha, beta, satGain, sharp) {
   const rgb = new cv.Mat();
   cv.cvtColor(m, rgb, cv.COLOR_RGBA2RGB);
   const chans = new cv.MatVector();
@@ -587,21 +589,34 @@ function enhanced(m) {
   chans.delete();
   flatChans.delete();
 
-  rgb.convertTo(rgb, -1, 1.2, -40);
+  rgb.convertTo(rgb, -1, alpha, beta);
 
   const hsv = new cv.Mat();
   cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
   const hv = new cv.MatVector();
   cv.split(hsv, hv);
   const sat = hv.get(1);
-  sat.convertTo(sat, -1, 1.35, 0);
+  sat.convertTo(sat, -1, satGain, 0);
   hv.set(1, sat);
   sat.delete();
   cv.merge(hv, hsv);
   hv.delete();
   cv.cvtColor(hsv, rgb, cv.COLOR_HSV2RGB);
   hsv.delete();
-  return rgb;
+  return sharpen(rgb, sharp);
+}
+
+// Unsharp mask; the radius follows the page size so previews and full pages look alike
+function sharpen(m, amount) {
+  if (!amount) return m;
+  const sigma = Math.max(0.8, Math.max(m.cols, m.rows) / 2200);
+  const blur = new cv.Mat();
+  cv.GaussianBlur(m, blur, new cv.Size(0, 0), sigma);
+  const out = new cv.Mat();
+  cv.addWeighted(m, 1 + amount, blur, -amount, 0, out);
+  blur.delete();
+  m.delete();
+  return out;
 }
 
 function grayscale(m) {
@@ -615,7 +630,7 @@ function grayscale(m) {
   clahe.delete();
   f.delete();
   out.convertTo(out, -1, 1.15, -25);
-  return out;
+  return sharpen(out, 0.6);
 }
 
 function blackWhite(m, strength) {

@@ -7,8 +7,11 @@ import { getPage, updatePage, emit } from './store.js';
 
 export const editing = { id: null };   // the page open in crop/filter; the queue leaves it alone
 
+// Bump when the output changes, so pages made earlier are redone
+const RENDER_VERSION = 2;
+
 export function renderKey(page) {
-  return JSON.stringify([page.corners, page.filter, page.rotation, page.strength == null ? null : page.strength]);
+  return JSON.stringify([RENDER_VERSION, page.corners, page.filter, page.rotation, page.strength == null ? null : page.strength]);
 }
 
 export function isProcessed(page) {
@@ -59,7 +62,7 @@ async function encode(img, filter) {
   scratch.width = img.width;
   scratch.height = img.height;
   scratch.getContext('2d').putImageData(img, 0, 0);
-  let blob = await canvasToBlob(scratch, 'image/jpeg', 0.85);
+  let blob = await canvasToBlob(scratch, 'image/jpeg', 0.9);
   if (filter === 'bw') {
     const png = await canvasToBlob(scratch, 'image/png');
     if (png.size < blob.size) blob = png;

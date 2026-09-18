@@ -4,6 +4,9 @@ import { session, addPage, newId, removePage, restorePage, commitDelete } from '
 import { editing, enqueue, getAutoCorners } from './pipeline.js';
 import { toast } from './ui.js';
 
+// Set by crop's Next so the page screen plays the straighten-and-scan intro for that page
+export const handoff = { morph: null };
+
 export function go(hash) {
   if (location.hash === hash) window.dispatchEvent(new HashChangeEvent('hashchange'));
   else location.hash = hash;

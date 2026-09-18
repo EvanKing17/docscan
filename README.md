@@ -28,7 +28,7 @@ Static files, no build step. GitHub Pages serves `main` from the repository root
 | `index.html`, `css/style.css` | the three screens: pages, crop, page |
 | `js/app.js` | startup, hash routing, scanner status, service worker registration |
 | `js/store.js`, `js/storage.js` | session state, persisted to IndexedDB on every change |
-| `js/capture.js` | camera and gallery input, EXIF-correct decode, downscale to 2000 px |
+| `js/capture.js` | camera and gallery input, EXIF-correct decode, downscale to 3200 px |
 | `js/cv-client.js` | loads OpenCV and talks to the worker |
 | `js/worker/cv-worker.js` | edge detection, perspective warp, filters (OpenCV, off the UI thread) |
 | `js/pipeline.js` | background processing queue |

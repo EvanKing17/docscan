@@ -5,7 +5,7 @@
  * Bump VERSION on every deploy that changes a cached file. Shell files are fetched with
  * cache: 'reload' so a new version never picks up a stale copy from the HTTP cache.
  */
-const VERSION = '4';
+const VERSION = '5';
 const CACHE = 'docscan-v' + VERSION;
 
 const SHELL = [

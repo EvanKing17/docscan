@@ -4,7 +4,7 @@
  *
  * page = {
  *   id, w, h,
- *   originalBlob, origThumbBlob,     downscaled capture (long edge <= 2000) and its thumbnail
+ *   originalBlob, origThumbBlob,     downscaled capture (long edge <= 3200) and its thumbnail
  *   corners,                         [[x,y] x4] TL,TR,BR,BL in original coords, null until set
  *   autoCorners, detectRan,          detection result (null if it found nothing)
  *   filter, rotation,
@@ -122,7 +122,12 @@ export async function resetSession() {
   emit('pages');
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec'];
+
+// "DocScan Sept 18 2026 5:17:22PM"
 export function defaultName(d = new Date()) {
   const p = n => String(n).padStart(2, '0');
-  return `Scan ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}${p(d.getMinutes())}`;
+  const h = d.getHours();
+  return `DocScan ${MONTHS[d.getMonth()]} ${d.getDate()} ${d.getFullYear()} ` +
+    `${h % 12 || 12}:${p(d.getMinutes())}:${p(d.getSeconds())}${h < 12 ? 'AM' : 'PM'}`;
 }

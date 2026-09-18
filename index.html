@@ -93,7 +93,13 @@
       <button type="button" class="icon-btn" data-act="delete" data-icon="trash" aria-label="Delete page"></button>
     </header>
     <div class="page-stage">
-      <canvas></canvas>
+      <canvas class="page-preview"></canvas>
+      <div class="intro" hidden>
+        <img class="intro-photo" alt="">
+        <canvas class="intro-plain"></canvas>
+        <canvas class="intro-filtered"></canvas>
+        <div class="scanline"></div>
+      </div>
       <div class="spin-wrap"><span class="spin"></span></div>
     </div>
     <div class="page-tools">
