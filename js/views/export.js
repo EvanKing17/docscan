@@ -19,6 +19,18 @@ function safeName(s) {
   return (String(s).replace(/[\\/*?"<>|]+/g, '-').trim() || defaultName()).slice(0, 120);
 }
 
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function shareBody(list, format, pages) {
+  const names = list.map(f => f.name);
+  const shown = names.length > 10 ? names.slice(0, 10).concat(`and ${names.length - 10} more`) : names;
+  const head = format === 'pdf'
+    ? `Attached: ${names[0]} (${pages} page${pages === 1 ? '' : 's'})`
+    : names.length === 1 ? `Attached: ${names[0]}` : `Attached:\n${shown.join('\n')}`;
+  return `${head}\n\nScanned with DocScan`;
+}
+
 function seg(name, options, current) {
   return `<div class="seg" role="radiogroup" style="grid-template-columns:repeat(${options.length},1fr)">
     ${options.map(([v, l]) => `<label><input type="radio" name="${name}" value="${v}"${current === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}
@@ -167,8 +179,12 @@ export function openExport() {
   sendBtn.addEventListener('click', async () => {
     if (!ready) return;
     const list = files();
+    const data = { files: list, title: baseName() };
+    // Email apps use this as the body. iOS turns shared text into an extra .txt file in
+    // Save to Files, so it is left off there.
+    if (!isIOS) data.text = shareBody(list, ready.format, session.pages.length);
     try {
-      await navigator.share({ files: list, title: baseName() });
+      await navigator.share(data);
     } catch (err) {
       if (err.name !== 'AbortError') toast("Couldn't send: " + err.message, { duration: 4000 });
     }
