@@ -293,7 +293,13 @@ function refineCorners(c) {
       const keep = pts.filter((p, k) => res[k] <= Math.max(1.5, 2.5 * med));
       line = keep.length >= 10 ? fitLine(keep) : line;
     }
-    lines.push(line || fitLine([a, b]));
+    line = line || fitLine([a, b]);
+    // Pull the side in a hair: the edge pixels themselves are half paper, half table
+    const inset = Math.max(3, 0.003 * Math.max(G.w, G.h));
+    const sgn = line.nx * (cx - line.x) + line.ny * (cy - line.y) > 0 ? 1 : -1;
+    line.x += line.nx * sgn * inset;
+    line.y += line.ny * sgn * inset;
+    lines.push(line);
   }
   gray.delete();
 

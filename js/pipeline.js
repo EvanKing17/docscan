@@ -28,7 +28,7 @@ export function fullCorners(w, h) {
 }
 
 // Bump when detection changes, so pages scanned earlier get the new result from Auto
-const DETECT_VERSION = 2;
+const DETECT_VERSION = 3;
 
 /* Detection result for this page, run once and remembered */
 export function getAutoCorners(page) {
