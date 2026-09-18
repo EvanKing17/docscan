@@ -24,14 +24,17 @@ export function fullCorners(w, h) {
   return [[0, 0], [w, 0], [w, h], [0, h]];
 }
 
+// Bump when detection changes, so pages scanned earlier get the new result from Auto
+const DETECT_VERSION = 2;
+
 /* Detection result for this page, run once and remembered */
 export function getAutoCorners(page) {
-  if (page.detectRan) return Promise.resolve(page.autoCorners || null);
+  if (page.detectRan && page.detectVersion === DETECT_VERSION) return Promise.resolve(page.autoCorners || null);
   if (!page._detecting) {
     page._detecting = detectCorners(page)
       .then(c => {
         page._detecting = null;
-        updatePage(page, { autoCorners: c || null, detectRan: true });
+        updatePage(page, { autoCorners: c || null, detectRan: true, detectVersion: DETECT_VERSION });
         return c || null;
       })
       .catch(err => {
