@@ -67,11 +67,30 @@ async function checkOffline() {
   return offlineReady;
 }
 
+/* Which build this is, for when a fix doesn't seem to be there yet. Asked of the service worker,
+   so it is the version actually being served, and there is only sw.js's VERSION to bump. */
+const versionEl = document.querySelector('.app-version');
+
+function askVersion(reg) {
+  const sw = navigator.serviceWorker.controller || (reg && reg.active);
+  if (sw) sw.postMessage({ type: 'version' });
+}
+
 function registerSw() {
   if (!('serviceWorker' in navigator)) return;
   const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(checkOffline).catch(err => console.warn('SW', err));
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data && e.data.type === 'version') {
+      versionEl.textContent = 'v' + e.data.version;
+      versionEl.hidden = false;
+    }
+  });
+  navigator.serviceWorker.register('sw.js')
+    .then(() => navigator.serviceWorker.ready)
+    .then(reg => { askVersion(reg); return checkOffline(); })
+    .catch(err => console.warn('SW', err));
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    askVersion();
     if (hadController) toast('A new version is ready', { action: 'Reload', onAction: () => location.reload(), duration: 10000 });
   });
 }

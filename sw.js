@@ -5,7 +5,7 @@
  * Bump VERSION on every deploy that changes a cached file. Shell files are fetched with
  * cache: 'reload' so a new version never picks up a stale copy from the HTTP cache.
  */
-const VERSION = '3';
+const VERSION = '4';
 const CACHE = 'docscan-v' + VERSION;
 
 const SHELL = [
@@ -55,6 +55,13 @@ self.addEventListener('activate', event => {
       .then(keys => Promise.all(keys.filter(k => k.startsWith('docscan-') && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// The page shows this as its version: it is the build actually being served from cache
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'version' && event.source) {
+    event.source.postMessage({ type: 'version', version: VERSION });
+  }
 });
 
 self.addEventListener('fetch', event => {

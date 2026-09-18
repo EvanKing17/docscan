@@ -737,3 +737,13 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .btn.send span { display: grid; text-align: left; line-height: 1.2; }
 .btn.send small { font-size: 12px; font-weight: 500; opacity: 0.85; }
 .no-share { margin: 0; text-align: center; }
+
+.app-version {
+  align-self: flex-end;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font: 500 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0;
+  opacity: 0.8;
+  user-select: none;
+}
