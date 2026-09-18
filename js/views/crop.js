@@ -199,33 +199,60 @@ function layout() {
 }
 
 function schedule() {
-  if (!frame) frame = requestAnimationFrame(() => { frame = 0; draw(); });
+  if (!frame) {
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      draw();
+      if (drag) showLoupe(focusPoint());
+    });
+  }
 }
+
+// Built once and updated in place; rebuilding the SVG on every move made dragging stutter
+const NS = 'http://www.w3.org/2000/svg';
+const mk = (tag, cls) => { const e = document.createElementNS(NS, tag); if (cls) e.setAttribute('class', cls); return e; };
+const shadeEl = mk('path', 'shade');
+shadeEl.setAttribute('fill-rule', 'evenodd');
+const outlineEl = mk('polygon', 'outline');
+const edgeEls = [0, 1, 2, 3].map(() => {
+  const g = mk('g', 'h-edge');
+  g.appendChild(mk('rect'));
+  return g;
+});
+const cornerEls = [0, 1, 2, 3].map(() => mk('circle', 'h-corner'));
+svg.append(shadeEl, outlineEl, ...edgeEls, ...cornerEls);
 
 function draw() {
   if (!corners) return;
   const s = box.scale;
   const valid = isValid(corners) || isValid(orderCorners(corners));
-  const pts = corners.map(p => `${p[0]},${p[1]}`).join(' ');
-  const act = (kind, i) => (drag && drag.kind === kind && drag.i === i ? ' active' : '');
+  const isAct = (kind, i) => !!(drag && drag.kind === kind && drag.i === i);
 
-  let edges = '';
+  shadeEl.setAttribute('d', `M0 0H${W}V${H}H0Z M${corners.map(p => p[0] + ' ' + p[1]).join(' L')}Z`);
+  outlineEl.setAttribute('points', corners.map(p => `${p[0]},${p[1]}`).join(' '));
+  outlineEl.setAttribute('class', 'outline' + (valid ? '' : ' bad'));
+  outlineEl.style.strokeWidth = 2 / s;
+
   for (let i = 0; i < 4; i++) {
     const a = corners[i], b = corners[(i + 1) % 4];
-    if (dist(a, b) * s < 90) continue;   // no room for a handle between the corners
+    const g = edgeEls[i];
+    // No room for a handle between the corners
+    g.style.display = dist(a, b) * s < 90 ? 'none' : '';
     const m = mid(a, b);
     const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-    edges += `<g class="h-edge${act('edge', i)}" transform="translate(${m[0]} ${m[1]}) rotate(${ang})">` +
-      `<rect x="${-15 / s}" y="${-4.5 / s}" width="${30 / s}" height="${9 / s}" rx="${4.5 / s}" style="stroke-width:${1.5 / s}"/></g>`;
+    g.setAttribute('transform', `translate(${m[0]} ${m[1]}) rotate(${ang})`);
+    g.setAttribute('class', 'h-edge' + (isAct('edge', i) ? ' active' : ''));
+    const r = g.firstChild;
+    r.setAttribute('x', -15 / s); r.setAttribute('y', -4.5 / s);
+    r.setAttribute('width', 30 / s); r.setAttribute('height', 9 / s); r.setAttribute('rx', 4.5 / s);
+    r.style.strokeWidth = 1.5 / s;
+
+    const c = cornerEls[i], p = corners[i];
+    c.setAttribute('cx', p[0]); c.setAttribute('cy', p[1]);
+    c.setAttribute('r', (isAct('corner', i) ? 16 : 13) / s);
+    c.setAttribute('class', 'h-corner' + (isAct('corner', i) ? ' active' : ''));
+    c.style.strokeWidth = 2.5 / s;
   }
-
-  const handles = corners.map((p, i) =>
-    `<circle class="h-corner${act('corner', i)}" cx="${p[0]}" cy="${p[1]}" r="${(drag && drag.kind === 'corner' && drag.i === i ? 16 : 13) / s}" style="stroke-width:${2.5 / s}"/>`).join('');
-
-  svg.innerHTML =
-    `<path class="shade" fill-rule="evenodd" d="M0 0H${W}V${H}H0Z M${corners.map(p => p[0] + ' ' + p[1]).join(' L')}Z"/>` +
-    `<polygon class="outline${valid ? '' : ' bad'}" points="${pts}" style="stroke-width:${2 / s}"/>` +
-    edges + handles;
   nextBtn.disabled = !valid;
 }
 
@@ -276,31 +303,46 @@ stage.addEventListener('pointerdown', e => {
   cancelAnimationFrame(anim);
   touched = true;
   stage.setPointerCapture(e.pointerId);
-  drag = Object.assign(h, { pointerId: e.pointerId, start: p, orig: clone(corners) });
-  if (h.kind === 'corner') drag.off = [corners[h.i][0] - p[0], corners[h.i][1] - p[1]];
-  const f = focusPoint();
-  showLoupe(f);
+  drag = Object.assign(h, { pointerId: e.pointerId, last: { x: e.clientX, y: e.clientY, t: e.timeStamp }, orig: clone(corners), d: 0 });
+  showLoupe(focusPoint());
   draw();
 });
+
+/*
+ * The handle follows the finger's movement, not its position: slow movement is scaled down for
+ * fine placement, fast movement goes 1:1. Moving slowly lets the handle creep out from under
+ * the fingertip too.
+ */
+function gain(speed) {
+  const t = Math.max(0, Math.min(1, (speed - 0.05) / (0.9 - 0.05)));   // CSS px per ms
+  return 0.35 + 0.65 * t * t * (3 - 2 * t);
+}
 
 stage.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.pointerId) return;
   e.preventDefault();
-  const p = toImg(e);
-  if (drag.kind === 'corner') {
-    corners[drag.i] = clampPt([p[0] + drag.off[0], p[1] + drag.off[1]]);
-  } else {
-    // Slide the whole edge along its normal
-    const i = drag.i, j = (i + 1) % 4;
-    const a = drag.orig[i], b = drag.orig[j];
-    const len = dist(a, b) || 1;
-    const n = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
-    const d = (p[0] - drag.start[0]) * n[0] + (p[1] - drag.start[1]) * n[1];
-    corners[i] = clampPt([a[0] + n[0] * d, a[1] + n[1] * d]);
-    corners[j] = clampPt([b[0] + n[0] * d, b[1] + n[1] * d]);
+  const evs = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
+  for (const ev of evs) {
+    const dx = ev.clientX - drag.last.x, dy = ev.clientY - drag.last.y;
+    const dt = Math.max(4, ev.timeStamp - drag.last.t);
+    drag.last = { x: ev.clientX, y: ev.clientY, t: ev.timeStamp };
+    if (!dx && !dy) continue;
+    const k = gain(Math.hypot(dx, dy) / dt) / box.scale;
+    if (drag.kind === 'corner') {
+      const p = corners[drag.i];
+      corners[drag.i] = clampPt([p[0] + dx * k, p[1] + dy * k]);
+    } else {
+      // Slide the whole edge along its normal
+      const i = drag.i, j = (i + 1) % 4;
+      const a = drag.orig[i], b = drag.orig[j];
+      const len = dist(a, b) || 1;
+      const n = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
+      drag.d += (dx * n[0] + dy * n[1]) * k;
+      corners[i] = clampPt([a[0] + n[0] * drag.d, a[1] + n[1] * drag.d]);
+      corners[j] = clampPt([b[0] + n[0] * drag.d, b[1] + n[1] * drag.d]);
+    }
   }
   schedule();
-  showLoupe(focusPoint());
 });
 
 function endDrag(e) {

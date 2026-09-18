@@ -18,6 +18,7 @@ export const session = {
   pageSize: 'auto',
   name: '',
   defaultFilter: 'enhanced',
+  exportFormat: 'pdf',
 };
 
 const subs = new Set();
@@ -33,6 +34,7 @@ function metaRecord() {
     pageSize: session.pageSize,
     name: session.name,
     defaultFilter: session.defaultFilter,
+    exportFormat: session.exportFormat,
   };
 }
 
@@ -53,6 +55,7 @@ export async function load() {
     session.pageSize = meta.pageSize || 'auto';
     session.name = meta.name || '';
     session.defaultFilter = meta.defaultFilter || 'enhanced';
+    session.exportFormat = meta.exportFormat || 'pdf';
   }
   emit('load');
 }

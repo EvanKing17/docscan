@@ -84,24 +84,249 @@ function detect() {
   cv.resize(src, small, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)), 0, 0, cv.INTER_AREA);
   const gray = new cv.Mat();
   cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-  small.delete();
   cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
 
+  // Every pass proposes quads; each is scored on whether all four sides sit on a real edge
+  // with a change in brightness across it, and the best one wins. Taking the first convex
+  // quad found picked up outlines that merged the page with things on the desk.
   const minArea = gray.cols * gray.rows * 0.2;
-  let quad = null;
-  const passes = [edgesAuto, edgesFixed, regionOtsu];
-  for (let i = 0; i < passes.length && !quad; i++) {
-    const map = passes[i](gray);
-    quad = findQuad(map, minArea);
+  const scoreEdges = edgesAuto(gray);
+  const cands = [];
+  const maps = [
+    () => edgesAuto(gray),
+    () => edgesFixed(gray),
+    () => regionOtsu(gray),
+    () => regionOtsu(whiteness(small)),
+  ];
+  for (const make of maps) {
+    const map = make();
+    collectQuads(map, minArea, cands);
     map.delete();
   }
-  gray.delete();
-  if (!quad) return null;
+  small.delete();
 
-  return orderCorners(quad).map(([x, y]) => [
-    clamp(x / scale, 0, src.cols),
-    clamp(y / scale, 0, src.rows),
-  ]);
+  const G = { d: gray.data, w: gray.cols, h: gray.rows };
+  const E = { d: scoreEdges.data, w: scoreEdges.cols, h: scoreEdges.rows };
+  let best = null;
+  for (const q of cands) {
+    const s = scoreQuad(q, G, E);
+    if (!best || s > best.s) best = { q, s };
+  }
+  gray.delete();
+  scoreEdges.delete();
+  if (!best || best.s < 0.3) return null;
+
+  const coarse = best.q.map(([x, y]) => [x / scale, y / scale]);
+  const refined = refineCorners(coarse);
+  return refined.map(([x, y]) => [clamp(x, 0, src.cols), clamp(y, 0, src.rows)]);
+}
+
+// Min of R, G, B: high for white paper, low for wood, carpet and most coloured surfaces
+function whiteness(rgba) {
+  const chans = new cv.MatVector();
+  cv.split(rgba, chans);
+  const r = chans.get(0), g = chans.get(1), b = chans.get(2);
+  const out = new cv.Mat();
+  cv.min(r, g, out);
+  cv.min(out, b, out);
+  cv.GaussianBlur(out, out, new cv.Size(5, 5), 0);
+  r.delete(); g.delete(); b.delete(); chans.delete();
+  return out;
+}
+
+function collectQuads(map, minArea, out) {
+  const contours = new cv.MatVector();
+  const hier = new cv.Mat();
+  cv.findContours(map, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+  const list = [];
+  for (let i = 0; i < contours.size(); i++) {
+    const c = contours.get(i);
+    const area = cv.contourArea(c);
+    if (area >= minArea * 0.8) list.push({ c, area }); else c.delete();
+  }
+  list.sort((a, b) => b.area - a.area);
+
+  const tryApprox = shape => {
+    const peri = cv.arcLength(shape, true);
+    for (const eps of [0.015, 0.02, 0.03, 0.045, 0.07]) {
+      const approx = new cv.Mat();
+      cv.approxPolyDP(shape, approx, eps * peri, true);
+      let pts = null;
+      if (approx.rows === 4 && cv.isContourConvex(approx) && Math.abs(cv.contourArea(approx)) >= minArea) {
+        const d = approx.data32S;
+        pts = orderCorners([[d[0], d[1]], [d[2], d[3]], [d[4], d[5]], [d[6], d[7]]]);
+        if (minAngle(pts) < 35) pts = null;
+      }
+      approx.delete();
+      if (pts) { out.push(pts); return; }
+    }
+  };
+
+  list.slice(0, 10).forEach(({ c }) => {
+    tryApprox(c);
+    const hull = new cv.Mat();
+    cv.convexHull(c, hull, false, true);
+    tryApprox(hull);
+    hull.delete();
+  });
+
+  list.forEach(x => x.c.delete());
+  contours.delete();
+  hier.delete();
+}
+
+function px(img, x, y) {
+  const xi = Math.max(0, Math.min(img.w - 1, Math.round(x)));
+  const yi = Math.max(0, Math.min(img.h - 1, Math.round(y)));
+  return img.d[yi * img.w + xi];
+}
+
+/*
+ * 0..1. Per side: the share of sample points lying on an edge pixel, and the share with a
+ * clear brightness difference just inside vs just outside. The weakest side dominates, so a
+ * quad with one side running through empty table scores low.
+ */
+function scoreQuad(q, G, E) {
+  const cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4;
+  const cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4;
+  const sides = [];
+  for (let i = 0; i < 4; i++) {
+    const a = q[i], b = q[(i + 1) % 4];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const dx = (b[0] - a[0]) / len, dy = (b[1] - a[1]) / len;
+    let nx = -dy, ny = dx;
+    if (nx * (cx - (a[0] + b[0]) / 2) + ny * (cy - (a[1] + b[1]) / 2) < 0) { nx = -nx; ny = -ny; }
+    // A page running off the photo has a side along the frame with nothing to measure
+    const onBorder = (p, q2) => (p[0] < 4 && q2[0] < 4) || (p[1] < 4 && q2[1] < 4) ||
+      (p[0] > G.w - 5 && q2[0] > G.w - 5) || (p[1] > G.h - 5 && q2[1] > G.h - 5);
+    if (onBorder(a, b)) { sides.push(0.6); continue; }
+    const N = 40, off = 5;
+    let onEdge = 0, contrast = 0;
+    for (let k = 0; k < N; k++) {
+      const t = 0.1 + 0.8 * k / (N - 1);
+      const x = a[0] + dx * len * t, y = a[1] + dy * len * t;
+      let hit = false;
+      for (let s = -2; s <= 2 && !hit; s++) if (px(E, x + nx * s, y + ny * s)) hit = true;
+      if (hit) onEdge++;
+      const inside = px(G, x + nx * off, y + ny * off);
+      const outside = px(G, x - nx * off, y - ny * off);
+      if (Math.abs(inside - outside) > 18) contrast++;
+    }
+    sides.push(0.5 * onEdge / N + 0.5 * contrast / N);
+  }
+  const min = Math.min(...sides);
+  const mean = sides.reduce((s, v) => s + v, 0) / 4;
+  const area = Math.abs(q.reduce((s, p, i) => {
+    const r = q[(i + 1) % 4];
+    return s + p[0] * r[1] - r[0] * p[1];
+  }, 0)) / 2 / (G.w * G.h);
+  return 0.65 * min + 0.25 * mean + 0.1 * area;
+}
+
+/*
+ * The coarse corners come from a 500px copy, so they can be several pixels off at full size.
+ * Along each side, find the paper's border on the full-resolution image (the outermost strong
+ * brightness step across the side), fit a straight line through those points, and take the
+ * corners as the intersections of neighbouring lines.
+ */
+function refineCorners(c) {
+  const gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0);
+  const G = { d: gray.data, w: gray.cols, h: gray.rows };
+
+  const sample = (x, y) => {
+    x = Math.max(0, Math.min(G.w - 1.001, x));
+    y = Math.max(0, Math.min(G.h - 1.001, y));
+    const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    const i = y0 * G.w + x0;
+    return (G.d[i] * (1 - fx) + G.d[i + 1] * fx) * (1 - fy) + (G.d[i + G.w] * (1 - fx) + G.d[i + G.w + 1] * fx) * fy;
+  };
+
+  const cx = (c[0][0] + c[1][0] + c[2][0] + c[3][0]) / 4;
+  const cy = (c[0][1] + c[1][1] + c[2][1] + c[3][1]) / 4;
+  const lines = [];
+  let maxR = 0;
+
+  for (let i = 0; i < 4; i++) {
+    const a = c[i], b = c[(i + 1) % 4];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const dx = (b[0] - a[0]) / len, dy = (b[1] - a[1]) / len;
+    let nx = -dy, ny = dx;
+    if (nx * (cx - (a[0] + b[0]) / 2) + ny * (cy - (a[1] + b[1]) / 2) < 0) { nx = -nx; ny = -ny; }
+    const R = Math.round(clamp(len * 0.02, 10, 30));
+    maxR = Math.max(maxR, R);
+
+    const pts = [];
+    const N = 48;
+    for (let k = 0; k < N; k++) {
+      const t = 0.08 + 0.84 * k / (N - 1);
+      const x = a[0] + dx * len * t, y = a[1] + dy * len * t;
+      // Profile from outside (-R) to inside (+R)
+      const prof = [];
+      for (let s = -R; s <= R; s++) prof.push(sample(x + nx * s, y + ny * s));
+      const d = [];
+      let maxAbs = 0;
+      for (let j = 1; j < prof.length - 1; j++) {
+        d[j] = prof[j + 1] - prof[j - 1];
+        maxAbs = Math.max(maxAbs, Math.abs(d[j]));
+      }
+      if (maxAbs < 12) continue;
+      let j = 1;
+      while (j < prof.length - 1 && Math.abs(d[j]) < 0.6 * maxAbs) j++;
+      while (j + 1 < prof.length - 1 && Math.abs(d[j + 1]) > Math.abs(d[j])) j++;
+      let sub = 0;
+      if (j > 1 && j + 1 < prof.length - 1) {
+        const l = Math.abs(d[j - 1]), m = Math.abs(d[j]), r = Math.abs(d[j + 1]);
+        const den = l - 2 * m + r;
+        if (den < 0) sub = clamp(0.5 * (l - r) / den, -0.5, 0.5);
+      }
+      const s = j - R + sub;
+      pts.push([x + nx * s, y + ny * s]);
+    }
+
+    let line = pts.length >= 12 ? fitLine(pts) : null;
+    if (line) {
+      // Drop points far from the first fit (text, table rules, a shadow) and fit again
+      const res = pts.map(p => Math.abs((p[0] - line.x) * line.nx + (p[1] - line.y) * line.ny));
+      const med = res.slice().sort((u, v) => u - v)[res.length >> 1];
+      const keep = pts.filter((p, k) => res[k] <= Math.max(1.5, 2.5 * med));
+      line = keep.length >= 10 ? fitLine(keep) : line;
+    }
+    lines.push(line || fitLine([a, b]));
+  }
+  gray.delete();
+
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    const p = intersect(lines[(i + 3) % 4], lines[i]);
+    out.push(p && Math.hypot(p[0] - c[i][0], p[1] - c[i][1]) < maxR * 2.5 ? p : c[i]);
+  }
+  return out;
+}
+
+// Total least squares: a point on the line and the unit normal
+function fitLine(pts) {
+  const n = pts.length;
+  let mx = 0, my = 0;
+  pts.forEach(p => { mx += p[0]; my += p[1]; });
+  mx /= n; my /= n;
+  let sxx = 0, syy = 0, sxy = 0;
+  pts.forEach(p => {
+    const u = p[0] - mx, v = p[1] - my;
+    sxx += u * u; syy += v * v; sxy += u * v;
+  });
+  const theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);   // direction of the line
+  return { x: mx, y: my, nx: -Math.sin(theta), ny: Math.cos(theta) };
+}
+
+function intersect(l1, l2) {
+  // n1.p = c1, n2.p = c2
+  const c1 = l1.nx * l1.x + l1.ny * l1.y;
+  const c2 = l2.nx * l2.x + l2.ny * l2.y;
+  const det = l1.nx * l2.ny - l1.ny * l2.nx;
+  if (Math.abs(det) < 1e-9) return null;
+  return [(c1 * l2.ny - l1.ny * c2) / det, (l1.nx * c2 - c1 * l2.nx) / det];
 }
 
 function median(mat) {
@@ -144,43 +369,6 @@ function regionOtsu(gray) {
   cv.morphologyEx(bin, bin, cv.MORPH_CLOSE, k);
   k.delete();
   return bin;
-}
-
-function findQuad(map, minArea) {
-  const contours = new cv.MatVector();
-  const hier = new cv.Mat();
-  cv.findContours(map, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-  const list = [];
-  for (let i = 0; i < contours.size(); i++) {
-    const c = contours.get(i);
-    list.push({ c, area: cv.contourArea(c) });
-  }
-  list.sort((a, b) => b.area - a.area);
-
-  let found = null;
-  for (let i = 0; i < Math.min(list.length, 8) && !found; i++) {
-    if (list[i].area < minArea * 0.8) break;
-    const hull = new cv.Mat();
-    cv.convexHull(list[i].c, hull, false, true);
-    const peri = cv.arcLength(hull, true);
-    for (const eps of [0.02, 0.03, 0.05, 0.08]) {
-      const approx = new cv.Mat();
-      cv.approxPolyDP(hull, approx, eps * peri, true);
-      if (approx.rows === 4 && cv.isContourConvex(approx) && Math.abs(cv.contourArea(approx)) >= minArea) {
-        const d = approx.data32S;
-        const pts = [[d[0], d[1]], [d[2], d[3]], [d[4], d[5]], [d[6], d[7]]];
-        if (minAngle(orderCorners(pts)) > 35) found = pts;
-      }
-      approx.delete();
-      if (found) break;
-    }
-    hull.delete();
-  }
-
-  list.forEach(x => x.c.delete());
-  contours.delete();
-  hier.delete();
-  return found;
 }
 
 // TL, TR, BR, BL: sort by angle around the centroid, then start at the smallest x+y
@@ -245,6 +433,14 @@ function outputSize(c, iw, ih) {
   return { w: Math.max(1, Math.round(W * s)), h: Math.max(1, Math.round(H * s)) };
 }
 
+// Angle in degrees between segment a1-a2 and segment b1-b2
+function sideAngle(a1, a2, b1, b2) {
+  const u = Math.atan2(a2[1] - a1[1], a2[0] - a1[0]);
+  const v = Math.atan2(b2[1] - b1[1], b2[0] - b1[0]);
+  let d = Math.abs(u - v) * 180 / Math.PI % 180;
+  return Math.min(d, 180 - d);
+}
+
 function trueAspect(c, iw, ih) {
   const u0 = iw / 2, v0 = ih / 2;
   const P = p => [p[0] - u0, p[1] - v0, 1];
@@ -259,10 +455,16 @@ function trueAspect(c, iw, ih) {
   const n3 = [k3 * m3[0] - m1[0], k3 * m3[1] - m1[1], k3 * m3[2] - m1[2]];
 
   const zz = n2[2] * n3[2];
-  const f2 = -(n2[0] * n3[0] + n2[1] * n3[1]) / zz;
   const diag = Math.hypot(iw, ih);
-  // Near-frontal shots make f unobservable; edge lengths are accurate there anyway
-  if (!(Math.abs(zz) > 1e-12) || !(f2 > 0) || Math.sqrt(f2) < 0.3 * diag || Math.sqrt(f2) > 6 * diag) return null;
+  let f2 = -(n2[0] * n3[0] + n2[1] * n3[1]) / zz;
+  // When one pair of sides looks parallel (phone square to the page, just tilted), the focal
+  // length can't be recovered from the quad. Use a typical phone main camera instead:
+  // 26mm-equivalent, about 0.6 x the image diagonal.
+  // The estimate is only stable when both pairs of opposite sides clearly converge.
+  const conv = Math.min(sideAngle(c[0], c[1], c[3], c[2]), sideAngle(c[0], c[3], c[1], c[2]));
+  if (conv < 8 || !(Math.abs(zz) > 1e-12) || !(f2 > 0) || Math.sqrt(f2) < 0.4 * diag || Math.sqrt(f2) > 2.5 * diag) {
+    f2 = Math.pow(0.6 * diag, 2);
+  }
 
   const r = Math.sqrt(
     (n2[0] * n2[0] / f2 + n2[1] * n2[1] / f2 + n2[2] * n2[2]) /

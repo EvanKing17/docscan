@@ -1,4 +1,8 @@
-/* Export sheet: name, page size, build, then Share or Save. */
+/*
+ * Export sheet. The files are made as soon as the sheet opens (and again when the format or
+ * page size changes), so Send runs straight from the tap: browsers only allow the share sheet
+ * from a fresh tap, not at the end of a long build.
+ */
 import { session, saveMeta, defaultName } from '../store.js';
 import { processPage } from '../pipeline.js';
 import { buildPdf } from '../pdf.js';
@@ -11,108 +15,180 @@ function fmtSize(n) {
 }
 
 function safeName(s) {
-  return (s.replace(/[\\/:*?"<>|]+/g, '-').trim() || defaultName()).slice(0, 120);
+  return (String(s).replace(/[\\/:*?"<>|]+/g, '-').trim() || defaultName()).slice(0, 120);
+}
+
+function seg(name, options, current) {
+  return `<div class="seg" role="radiogroup" style="grid-template-columns:repeat(${options.length},1fr)">
+    ${options.map(([v, l]) => `<label><input type="radio" name="${name}" value="${v}"${current === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}
+  </div>`;
 }
 
 export function openExport() {
   const n = session.pages.length;
-  const sizes = [['auto', 'Auto'], ['letter', 'Letter'], ['a4', 'A4']];
   const d = sheet(`
     <form class="export" method="dialog">
       <div class="sheet-head">
-        <div class="sheet-title">Export PDF</div>
+        <div class="sheet-title">Export ${n} page${n === 1 ? '' : 's'}</div>
         <button value="" class="icon-btn" aria-label="Close">${icon('close')}</button>
+      </div>
+      <div class="field">
+        <span>Format</span>
+        ${seg('format', [['pdf', 'PDF'], ['images', 'Images (JPG)']], session.exportFormat || 'pdf')}
       </div>
       <label class="field">
         <span>File name</span>
         <input name="filename" value="${esc(session.name || defaultName())}" autocomplete="off" enterkeyhint="done">
       </label>
-      <div class="field">
+      <div class="field size-field">
         <span>Page size</span>
-        <div class="seg" role="radiogroup">
-          ${sizes.map(([v, l]) => `<label><input type="radio" name="size" value="${v}"${session.pageSize === v ? ' checked' : ''}><span>${l}</span></label>`).join('')}
-        </div>
+        ${seg('size', [['auto', 'Auto'], ['letter', 'Letter'], ['a4', 'A4']], session.pageSize)}
         <small class="hint">Auto uses Letter or A4 when the page is that shape, otherwise the page's own size.</small>
       </div>
-      <div class="export-progress" hidden>
+
+      <div class="export-status">
         <div class="progress"><i></i></div>
-        <span class="progress-msg"></span>
+        <span class="progress-msg">Preparing</span>
       </div>
-      <div class="export-result" hidden></div>
-      <div class="sheet-actions">
-        <button type="button" class="btn primary wide" data-act="make">${icon('pdf')}<span>Create PDF · ${n} page${n === 1 ? '' : 's'}</span></button>
+      <div class="result-file" hidden></div>
+      <p class="warn" hidden></p>
+
+      <div class="result-actions">
+        <button type="button" class="btn primary wide send" data-act="send" disabled>${icon('share')}<span>Send<small>Email, text, Drive and more</small></span></button>
+        <button type="button" class="btn wide" data-act="save" disabled>${icon('download')}<span>Save to device</span></button>
+        <p class="hint no-share" hidden>This browser can't hand files to other apps. Save them, then attach from your files.</p>
       </div>
     </form>`);
 
   const form = d.querySelector('form');
-  const makeBtn = d.querySelector('[data-act="make"]');
-  const prog = d.querySelector('.export-progress');
-  const bar = prog.querySelector('i');
-  const msg = prog.querySelector('.progress-msg');
-  const result = d.querySelector('.export-result');
-  let objectUrl = null;
+  const f = form.elements;
+  const status = d.querySelector('.export-status');
+  const bar = status.querySelector('i');
+  const msg = status.querySelector('.progress-msg');
+  const fileEl = d.querySelector('.result-file');
+  const warnEl = d.querySelector('.warn');
+  const sendBtn = d.querySelector('[data-act="send"]');
+  const saveBtn = d.querySelector('[data-act="save"]');
+  const noShare = d.querySelector('.no-share');
+  const sizeField = d.querySelector('.size-field');
 
-  d.addEventListener('close', () => {
-    if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
-  });
+  let build = 0;
+  let ready = null;   // { format, blobs }
+  let open = true;
+  d.addEventListener('close', () => { open = false; build++; });
 
-  form.elements.filename.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); form.elements.filename.blur(); } });
-  form.addEventListener('change', () => { result.hidden = true; makeBtn.hidden = false; });
+  const format = () => f.format.value || 'pdf';
+  const baseName = () => safeName(f.filename.value);
 
-  makeBtn.addEventListener('click', async () => {
-    const name = safeName(form.elements.filename.value);
-    session.name = name;
-    session.pageSize = form.elements.size.value || 'auto';
-    saveMeta();
+  function files() {
+    const name = baseName();
+    if (ready.format === 'pdf') return [new File([ready.blobs[0]], name + '.pdf', { type: 'application/pdf' })];
+    const many = ready.blobs.length > 1;
+    return ready.blobs.map((b, i) => {
+      const ext = b.type === 'image/png' ? 'png' : 'jpg';
+      return new File([b], `${name}${many ? ` (${i + 1})` : ''}.${ext}`, { type: b.type });
+    });
+  }
 
-    makeBtn.disabled = true;
-    result.hidden = true;
-    prog.hidden = false;
+  function showReady() {
+    const list = files();
+    const total = list.reduce((s, x) => s + x.size, 0);
+    fileEl.innerHTML = `${icon(ready.format === 'pdf' ? 'pdf' : 'images')}<div><b>${esc(list.length === 1 ? list[0].name : `${list.length} images`)}</b><small>${fmtSize(total)}</small></div>`;
+    fileEl.hidden = false;
+    status.hidden = true;
+    warnEl.hidden = !(ready.format === 'pdf' && total > WARN_BYTES);
+    warnEl.textContent = "This PDF is over 20 MB. Some email services won't accept it; try fewer pages or the B&W filter.";
+    const canShare = !!(navigator.canShare && navigator.canShare({ files: list }));
+    sendBtn.hidden = !canShare;
+    noShare.hidden = canShare;
+    sendBtn.disabled = false;
+    saveBtn.disabled = false;
+    saveBtn.classList.toggle('primary', !canShare);
+  }
+
+  async function prepare() {
+    const my = ++build;
+    ready = null;
+    sendBtn.disabled = true;
+    saveBtn.disabled = true;
+    fileEl.hidden = true;
+    warnEl.hidden = true;
+    status.hidden = false;
+    sizeField.hidden = format() !== 'pdf';
+
     const pages = session.pages.slice();
-    const total = pages.length * 2;
-    const set = (done, text) => { bar.style.width = Math.round(done / total * 100) + '%'; msg.textContent = text; };
-
+    const fmt = format();
+    const steps = fmt === 'pdf' ? pages.length * 2 : pages.length;
+    const set = (done, text) => { bar.style.width = Math.round(done / steps * 100) + '%'; msg.textContent = text; };
     try {
       for (let i = 0; i < pages.length; i++) {
         set(i, `Preparing page ${i + 1} of ${pages.length}`);
         await processPage(pages[i]);
+        if (my !== build) return;
       }
-      const blob = await buildPdf(pages, { pageSize: session.pageSize, title: name }, (i, of) => set(pages.length + i, `Adding page ${i} of ${of}`));
-      set(total, 'Done');
-      const filename = name + '.pdf';
-      const file = new File([blob], filename, { type: 'application/pdf' });
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      objectUrl = URL.createObjectURL(blob);
-      showResult(file, filename);
+      let blobs;
+      if (fmt === 'pdf') {
+        const pdf = await buildPdf(pages, { pageSize: session.pageSize, title: baseName() },
+          (i, of) => { if (my === build) set(pages.length + i, `Adding page ${i} of ${of}`); });
+        blobs = [pdf];
+      } else {
+        blobs = pages.map(p => p.processedBlob);
+      }
+      if (my !== build) return;
+      ready = { format: fmt, blobs };
+      showReady();
     } catch (err) {
+      if (my !== build || !open) return;
       console.error(err);
-      toast("Couldn't make the PDF: " + err.message, { duration: 5000 });
-    } finally {
-      makeBtn.disabled = false;
-      prog.hidden = true;
+      msg.textContent = "Couldn't prepare the files: " + err.message;
+    }
+  }
+
+  form.addEventListener('change', e => {
+    if (e.target.name === 'format') {
+      session.exportFormat = format();
+      saveMeta();
+      prepare();
+    } else if (e.target.name === 'size') {
+      session.pageSize = f.size.value || 'auto';
+      saveMeta();
+      if (format() === 'pdf') prepare();
     }
   });
 
-  function showResult(file, filename) {
-    const canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
-    result.innerHTML = `
-      <div class="result-file">${icon('pdf')}<div><b>${esc(filename)}</b><small>${fmtSize(file.size)}</small></div></div>
-      ${file.size > WARN_BYTES ? '<p class="warn">This file is over 20 MB. Some email services won\'t accept it; try fewer pages or the B&W filter.</p>' : ''}
-      <div class="result-actions">
-        ${canShare ? `<button type="button" class="btn primary wide" data-act="share">${icon('share')}<span>Share</span></button>` : ''}
-        <a class="btn wide${canShare ? '' : ' primary'}" href="${objectUrl}" download="${esc(filename)}">${icon('download')}<span>Save to device</span></a>
-      </div>`;
-    result.hidden = false;
-    makeBtn.hidden = true;
-    const shareBtn = result.querySelector('[data-act="share"]');
-    if (shareBtn) {
-      shareBtn.addEventListener('click', async () => {
-        try {
-          await navigator.share({ files: [file], title: filename });
-        } catch (err) {
-          if (err.name !== 'AbortError') toast("Couldn't share: " + err.message);
-        }
-      });
+  f.filename.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); f.filename.blur(); } });
+  f.filename.addEventListener('input', () => {
+    session.name = baseName();
+    saveMeta();
+    if (ready) showReady();
+  });
+
+  sendBtn.addEventListener('click', async () => {
+    if (!ready) return;
+    const list = files();
+    try {
+      await navigator.share({ files: list, title: baseName() });
+    } catch (err) {
+      if (err.name !== 'AbortError') toast("Couldn't send: " + err.message, { duration: 4000 });
     }
-  }
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    if (!ready) return;
+    const list = files();
+    for (let i = 0; i < list.length; i++) {
+      const url = URL.createObjectURL(list[i]);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = list[i].name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      // Browsers drop downloads fired in the same instant
+      if (i < list.length - 1) await new Promise(r => setTimeout(r, 400));
+    }
+  });
+
+  prepare();
 }

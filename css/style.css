@@ -728,3 +728,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 @media (min-width: 700px) {
   .sheet { margin: auto; border-radius: 18px; }
 }
+
+/* Export sheet, v2 */
+.export-status { display: grid; gap: 8px; margin-top: 16px; }
+.export .result-file { margin-top: 16px; }
+.export .result-actions { margin-top: 16px; }
+.btn.send { min-height: 58px; }
+.btn.send span { display: grid; text-align: left; line-height: 1.2; }
+.btn.send small { font-size: 12px; font-weight: 500; opacity: 0.85; }
+.no-share { margin: 0; text-align: center; }
