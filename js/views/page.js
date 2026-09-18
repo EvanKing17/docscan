@@ -66,7 +66,7 @@ chipsEl.addEventListener('click', e => {
   session.defaultFilter = f;
   saveMeta();
   markChip();
-  renderPreview();
+  renderPreview({ scan: true });
 });
 
 function finish() {
@@ -247,7 +247,7 @@ async function playIntro(p) {
     introPlain.style.transform = rectToQuad(rect.w, rect.h, from);
     introPlain.style.opacity = 1;
 
-    const morphed = await tween(620, my, t => {
+    const morphed = await tween(1000, my, t => {
       const e = easeInOut(t);
       const q = from.map((a, i) => [a[0] + (to[i][0] - a[0]) * e, a[1] + (to[i][1] - a[1]) * e]);
       introPlain.style.transform = rectToQuad(rect.w, rect.h, q);
@@ -256,16 +256,7 @@ async function playIntro(p) {
     if (!morphed) return;
     introPlain.style.transform = 'none';
 
-    if (filtered !== plain) {
-      scanline.style.opacity = 1;
-      const scanned = await tween(900, my, t => {
-        const e = 1 - Math.pow(1 - t, 2);
-        introFiltered.style.clipPath = `inset(0 0 ${(1 - e) * 100}% 0)`;
-        scanline.style.top = (rect.y + e * rect.h) + 'px';
-        if (t > 0.85) scanline.style.opacity = String((1 - t) / 0.15);
-      });
-      if (!scanned) return;
-    }
+    if (filtered !== plain && !(await scanReveal(my, rect))) return;
 
     preview.width = filtered.width;
     preview.height = filtered.height;
@@ -278,23 +269,67 @@ async function playIntro(p) {
   }
 }
 
-async function renderPreview() {
+// The scanline sweeps down introFiltered's box, uncovering it over whatever is beneath
+const SCAN_MS = 1400;
+
+function scanReveal(my, rect) {
+  scanline.style.left = rect.x + 'px';
+  scanline.style.width = rect.w + 'px';
+  scanline.style.top = rect.y + 'px';
+  scanline.style.opacity = 1;
+  introFiltered.style.clipPath = 'inset(0 0 100% 0)';
+  return tween(SCAN_MS, my, t => {
+    const e = easeInOut(t);
+    introFiltered.style.clipPath = `inset(0 0 ${(1 - e) * 100}% 0)`;
+    scanline.style.top = (rect.y + e * rect.h) + 'px';
+    if (t > 0.88) scanline.style.opacity = String((1 - t) / 0.12);
+  });
+}
+
+/* opts.scan: sweep the new look in over the old one (a filter change) */
+async function renderPreview(opts = {}) {
   const p = page;
   if (!p) return;
   const my = ++token;
-  endIntro();
+  const scan = opts.scan && preview.width > 1 && !reduceMotion.matches;
+  if (!scan) endIntro();
   spinner.hidden = false;
   const maxDim = previewMaxDim();
   try {
     const img = await renderPage(p, { maxDim });
     if (my !== token) return;
+    if (scan && img.width === preview.width && img.height === preview.height) {
+      spinner.hidden = true;
+      const sw = stage.clientWidth, sh = stage.clientHeight;
+      const fs = Math.min((sw - 32) / img.width, (sh - 24) / img.height);
+      const rect = { x: (sw - img.width * fs) / 2, y: (sh - img.height * fs) / 2, w: img.width * fs, h: img.height * fs };
+      // Old look underneath, new look on top
+      introPlain.width = img.width;
+      introPlain.height = img.height;
+      introPlain.getContext('2d').drawImage(preview, 0, 0);
+      introFiltered.width = img.width;
+      introFiltered.height = img.height;
+      introFiltered.getContext('2d').putImageData(img, 0, 0);
+      introPhoto.style.opacity = 0;
+      introPlain.style.transform = 'none';
+      introPlain.style.opacity = 1;
+      place(introPlain, rect);
+      place(introFiltered, rect);
+      intro.hidden = false;
+      preview.style.visibility = 'hidden';
+      const done = await scanReveal(my, rect);
+      if (!done) return;
+    }
     preview.width = img.width;
     preview.height = img.height;
     preview.getContext('2d').putImageData(img, 0, 0);
   } catch (err) {
     if (my === token) toast("Couldn't render the page: " + err.message, { duration: 4000 });
   } finally {
-    if (my === token) spinner.hidden = true;
+    if (my === token) {
+      spinner.hidden = true;
+      endIntro();
+    }
   }
 }
 
